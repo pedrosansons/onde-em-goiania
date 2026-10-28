@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onde em Goiânia?</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="pool.js"></script>
+<style>
+  :root {
+    --bg: #0f1a14;
+    --panel: #16241c;
+    --text: #eef4ef;
+    --muted: #9db3a4;
+    --accent: #f2b705;   /* amarelo do ipê */
+    --danger: #e0533d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: 12px 20px;
+    background: var(--accent); color: #1a1a1a; font-weight: 700; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: #000c; color: var(--text); border: 1px solid #ffffff33; padding: 10px 14px; }
+  .screen { position: fixed; inset: 0; display: none; }
+  .screen.active { display: block; }
+
+  /* Tela inicial */
+  #start { display: none; place-items: center; padding: 16px;
+    background: radial-gradient(circle at 30% 20%, #1f3a2a, var(--bg) 70%); }
+  #start.active { display: grid; }
+  .card { background: var(--panel); border-radius: 16px; padding: 28px; max-width: 460px; width: 100%;
+    box-shadow: 0 20px 60px #0008; }
+  .card h1 { margin: 0 0 4px; font-size: 2rem; }
+  .card h1 span { color: var(--accent); }
+  .card p { color: var(--muted); line-height: 1.45; }
+  .error { color: var(--danger); }
+
+  /* Jogo */
+  #pano { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  /* Tampa a caixa de endereço que o embed do Google mostra no canto superior esquerdo */
+  #hud { position: absolute; top: 0; left: 0; z-index: 5; width: 360px; max-width: 100vw; height: 96px;
+    background: var(--bg); border-bottom-right-radius: 16px; padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 8px; }
+  #hud .line { display: flex; gap: 12px; align-items: baseline; font-weight: 600; }
+  #scorePill { color: var(--accent); }
+  #hud .actions { display: flex; gap: 8px; }
+  #hud .actions button { padding: 6px 12px; font-size: .85rem; }
+  #guessBox { position: absolute; right: 16px; bottom: 36px; z-index: 6; width: 300px; display: flex;
+    flex-direction: column; gap: 8px; transition: width .2s; }
+  #guessBox:hover { width: min(620px, calc(100vw - 32px)); }
+  #guessMap { height: 210px; border-radius: 12px; border: 2px solid #fff4; transition: height .2s; }
+  #guessBox:hover #guessMap { height: min(440px, 55vh); }
+  #guessBtn { width: 100%; }
+
+  /* Resultado */
+  #result { z-index: 30; background: var(--bg); }
+  #result.active { display: flex; flex-direction: column; }
+  #resultMap { flex: 1; }
+  #resultBar { padding: 16px; background: var(--panel); display: flex; gap: 16px; align-items: center;
+    justify-content: space-between; flex-wrap: wrap; }
+  #resultText b { color: var(--accent); font-size: 1.3rem; }
+  .bar { height: 8px; background: #ffffff1a; border-radius: 99px; overflow: hidden; width: min(320px, 100%); margin-top: 6px; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .8s ease-out; }
+  #roundList { margin: 0; padding-left: 20px; color: var(--muted); font-size: .9rem; }
+
+  @media (max-width: 600px) {
+    #guessBox, #guessBox:hover { width: calc(100vw - 32px); }
+    #guessMap, #guessBox:hover #guessMap { height: 160px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Tela inicial -->
+<div id="start" class="screen active">
+  <div class="card">
+    <h1>Onde em <span>Goiânia</span>?</h1>
+    <p>Você cai numa rua aleatória de Goiânia. Olhe em volta, ande pelas ruas e marque no mapa onde acha que está.
+       5 rodadas, até 5.000 pontos cada.</p>
+    <p class="error" id="startError"></p>
+    <button id="playBtn">Jogar</button>
+  </div>
+</div>
+
+<!-- Jogo -->
+<div id="game" class="screen">
+  <iframe id="pano" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe>
+  <div id="hud">
+    <div class="line"><span id="roundPill">Rodada 1/5</span><span id="scorePill">0 pts</span></div>
+    <div class="actions">
+      <button class="ghost" id="homeBtn" title="Voltar ao ponto inicial">⟲ Início</button>
+      <button class="ghost" id="skipBtn" title="Sem foto aqui? Sorteia outro lugar">Pular lugar</button>
+    </div>
+  </div>
+  <div id="guessBox">
+    <div id="guessMap"></div>
+    <button id="guessBtn" disabled>Marque no mapa</button>
+  </div>
+</div>
+
+<!-- Resultado da rodada / final -->
+<div id="result" class="screen">
+  <div id="resultMap"></div>
+  <div id="resultBar">
+    <div id="resultText"></div>
+    <button id="nextBtn">Próxima rodada</button>
+  </div>
+</div>
+
+<script>
+const ROUNDS = 5;
+const MAX_POINTS = 5000;
+const CENTER = [-16.6799, -49.255];
+
+const $ = id => document.getElementById(id);
+const state = { round: 0, total: 0, results: [], current: null, heading: 0, guess: null };
+let guessMap, guessMarker, resultMap, resultLayer;
+
+// ---------- utilidades ----------
+function distanceMeters([lat1, lng1], [lat2, lng2]) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Curva pensada para uma cidade de ~25 km: 100 m ≈ 4.800, 1 km ≈ 3.350, 5 km ≈ 680
+function scoreFor(d) {
+  if (d < 30) return MAX_POINTS;
+  return Math.round(MAX_POINTS * Math.exp(-d / 2500));
+}
+
+function fmtDist(d) {
+  return d < 1000 ? `${Math.round(d)} m` : `${(d / 1000).toFixed(d < 10000 ? 2 : 1)} km`;
+}
+
+// ---------- Street View (embed do Google, sem chave) ----------
+function loadPano(reload) {
+  const [lat, lng] = state.current;
+  // O parâmetro "r" força o iframe a recarregar quando o jogador volta ao início
+  // output=svembed abre o Street View mais próximo (output=embed hoje cai num mapa-múndi)
+  $('pano').src = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lng}&cbp=11,${state.heading},0,0,0&output=svembed&hl=pt-BR&z=17`
+    + (reload ? `&r=${Date.now()}` : '');
+}
+
+function pickLocation() {
+  // Evita repetir lugares a menos de 2 km de rodadas anteriores
+  for (let i = 0; i < 50; i++) {
+    const p = PHOTO_POOL[Math.floor(Math.random() * PHOTO_POOL.length)];
+    if (state.results.every(r => distanceMeters(r.actual, p) > 2000)) return p;
+  }
+  return PHOTO_POOL[Math.floor(Math.random() * PHOTO_POOL.length)];
+}
+
+// ---------- Leaflet ----------
+function tiles() {
+  return L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap',
+  });
+}
+
+const pin = (color) => L.divIcon({
+  className: '', iconSize: [18, 18], iconAnchor: [9, 9],
+  html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 1px 4px #0008"></div>`,
+});
+
+function setupMaps() {
+  guessMap = L.map('guessMap', { zoomControl: false, attributionControl: false }).setView(CENTER, 12);
+  tiles().addTo(guessMap);
+  guessMap.on('click', e => {
+    state.guess = [e.latlng.lat, e.latlng.lng];
+    if (guessMarker) guessMarker.setLatLng(e.latlng);
+    else guessMarker = L.marker(e.latlng, { icon: pin('#f2b705') }).addTo(guessMap);
+    $('guessBtn').disabled = false;
+    $('guessBtn').textContent = 'Chutar';
+  });
+  // O mapa muda de tamanho no hover; o Leaflet precisa recalcular
+  $('guessMap').addEventListener('transitionend', () => guessMap.invalidateSize());
+
+  resultMap = L.map('resultMap').setView(CENTER, 12);
+  tiles().addTo(resultMap);
+  resultLayer = L.layerGroup().addTo(resultMap);
+}
+
+// ---------- fluxo do jogo ----------
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id));
+}
+
+function updateHud() {
+  $('roundPill').textContent = `Rodada ${state.round}/${ROUNDS}`;
+  $('scorePill').textContent = `${state.total.toLocaleString('pt-BR')} pts`;
+}
+
+function placeNewLocation() {
+  state.current = pickLocation();
+  state.heading = Math.floor(Math.random() * 360);
+  loadPano(false);
+}
+
+function newRound() {
+  state.round++;
+  state.guess = null;
+  updateHud();
+  showScreen('game');
+  $('guessBtn').disabled = true;
+  $('guessBtn').textContent = 'Marque no mapa';
+  if (guessMarker) { guessMarker.remove(); guessMarker = null; }
+  guessMap.setView(CENTER, 12);
+  setTimeout(() => guessMap.invalidateSize(), 50);
+  placeNewLocation();
+}
+
+function makeGuess() {
+  if (!state.guess) return;
+  const actual = state.current;
+  const d = distanceMeters(state.guess, actual);
+  const pts = scoreFor(d);
+  state.total += pts;
+  state.results.push({ guess: state.guess, actual, d, pts });
+  $('pano').src = 'about:blank';
+
+  showScreen('result');
+  resultLayer.clearLayers();
+  drawResult(state.results[state.results.length - 1]);
+  resultMap.invalidateSize();
+  resultMap.fitBounds(L.latLngBounds([state.guess, actual]).pad(0.4), { maxZoom: 17 });
+
+  const last = state.round >= ROUNDS;
+  $('resultText').innerHTML = `
+    <div>Você errou por <b>${fmtDist(d)}</b> — <b>${pts.toLocaleString('pt-BR')}</b> pontos</div>
+    <div class="bar"><div></div></div>`;
+  setTimeout(() => {
+    $('resultText').querySelector('.bar > div').style.width = `${(pts / MAX_POINTS) * 100}%`;
+  }, 50);
+  $('nextBtn').textContent = last ? 'Ver resultado final' : 'Próxima rodada';
+  $('nextBtn').onclick = last ? showFinal : newRound;
+}
+
+function drawResult(r, label) {
+  L.polyline([r.guess, r.actual], { color: '#222', weight: 3, dashArray: '6 8' }).addTo(resultLayer);
+  L.marker(r.guess, { icon: pin('#f2b705') }).addTo(resultLayer).bindTooltip(label ? `Chute ${label}` : 'Seu chute');
+  L.marker(r.actual, { icon: pin('#2e8b57') }).addTo(resultLayer)
+    .bindTooltip(label ? `Local ${label}` : 'Local certo')
+    .bindPopup(`<a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.actual[0]},${r.actual[1]}" target="_blank">Abrir no Google Maps</a>`);
+}
+
+function showFinal() {
+  resultLayer.clearLayers();
+  state.results.forEach((r, i) => drawResult(r, i + 1));
+  resultMap.fitBounds(L.latLngBounds(state.results.flatMap(r => [r.guess, r.actual])).pad(0.2));
+  const pct = state.total / (ROUNDS * MAX_POINTS);
+  const msg = pct > .85 ? 'Goiano raiz! 🌳' : pct > .6 ? 'Conhece bem a cidade.' : pct > .35 ? 'Dá pra melhorar, hein.' : 'Já saiu do Setor Bueno alguma vez?';
+  $('resultText').innerHTML = `
+    <div>Total: <b>${state.total.toLocaleString('pt-BR')}</b> / ${(ROUNDS * MAX_POINTS).toLocaleString('pt-BR')} — ${msg}</div>
+    <ol id="roundList">${state.results.map(r => `<li>${fmtDist(r.d)} · ${r.pts.toLocaleString('pt-BR')} pts</li>`).join('')}</ol>`;
+  $('nextBtn').textContent = 'Jogar de novo';
+  $('nextBtn').onclick = startGame;
+}
+
+function startGame() {
+  Object.assign(state, { round: 0, total: 0, results: [] });
+  newRound();
+}
+
+// ---------- início ----------
+$('playBtn').onclick = () => {
+  if (typeof PHOTO_POOL === 'undefined' || !PHOTO_POOL.length) {
+    $('startError').textContent = 'Falta o pool.js. Rode: python tools/build_pool.py';
+    return;
+  }
+  if (!guessMap) setupMaps();
+  startGame();
+};
+$('guessBtn').onclick = makeGuess;
+$('homeBtn').onclick = () => state.current && loadPano(true);
+$('skipBtn').onclick = placeNewLocation;
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && $('game').classList.contains('active') && state.guess) { e.preventDefault(); makeGuess(); }
+});
+</script>
+</body>
+</html>
