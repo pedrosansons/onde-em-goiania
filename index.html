@@ -79,6 +79,7 @@
     <h1>Onde em <span>Goiânia</span>?</h1>
     <p>Você cai numa rua aleatória de Goiânia. Olhe em volta, ande pelas ruas e marque no mapa onde acha que está.
        5 rodadas, até 5.000 pontos cada.</p>
+    <p id="startInfo" style="color: var(--accent)"></p>
     <p class="error" id="startError"></p>
     <button id="playBtn">Jogar</button>
   </div>
@@ -115,7 +116,27 @@ const MAX_POINTS = 5000;
 const CENTER = [-16.6799, -49.255];
 
 const $ = id => document.getElementById(id);
-const state = { round: 0, total: 0, results: [], current: null, heading: 0, guess: null };
+const state = { round: 0, total: 0, results: [], current: null, heading: 0, guess: null, seed: 0, rng: Math.random };
+
+// Desafio: ?desafio=<semente> faz todo mundo jogar os mesmos 5 lugares
+let challengeSeed = parseInt(new URLSearchParams(location.search).get('desafio'), 36);
+if (!Number.isFinite(challengeSeed)) challengeSeed = null;
+
+function mulberry32(a) {
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function getBest() {
+  try { return Number(localStorage.getItem('bestScore')) || 0; } catch { return 0; }
+}
+function saveBest(score) {
+  try { if (score > getBest()) localStorage.setItem('bestScore', score); } catch {}
+}
 let guessMap, guessMarker, resultMap, resultLayer;
 
 // ---------- utilidades ----------
@@ -148,10 +169,10 @@ function loadPano(reload) {
 function pickLocation() {
   // Evita repetir lugares a menos de 2 km de rodadas anteriores
   for (let i = 0; i < 50; i++) {
-    const p = PHOTO_POOL[Math.floor(Math.random() * PHOTO_POOL.length)];
+    const p = PHOTO_POOL[Math.floor(state.rng() * PHOTO_POOL.length)];
     if (state.results.every(r => distanceMeters(r.actual, p) > 2000)) return p;
   }
-  return PHOTO_POOL[Math.floor(Math.random() * PHOTO_POOL.length)];
+  return PHOTO_POOL[Math.floor(state.rng() * PHOTO_POOL.length)];
 }
 
 // ---------- Leaflet ----------
@@ -196,7 +217,7 @@ function updateHud() {
 
 function placeNewLocation() {
   state.current = pickLocation();
-  state.heading = Math.floor(Math.random() * 360);
+  state.heading = Math.floor(state.rng() * 360);
   loadPano(false);
 }
 
@@ -255,14 +276,36 @@ function showFinal() {
   const msg = pct > .85 ? 'Goiano raiz! 🌳' : pct > .6 ? 'Conhece bem a cidade.' : pct > .35 ? 'Dá pra melhorar, hein.' : 'Já saiu do Setor Bueno alguma vez?';
   $('resultText').innerHTML = `
     <div>Total: <b>${state.total.toLocaleString('pt-BR')}</b> / ${(ROUNDS * MAX_POINTS).toLocaleString('pt-BR')} — ${msg}</div>
-    <ol id="roundList">${state.results.map(r => `<li>${fmtDist(r.d)} · ${r.pts.toLocaleString('pt-BR')} pts</li>`).join('')}</ol>`;
+    <ol id="roundList">${state.results.map(r => `<li>${fmtDist(r.d)} · ${r.pts.toLocaleString('pt-BR')} pts</li>`).join('')}</ol>
+    <button class="ghost" id="shareBtn" style="margin-top:10px">Desafiar colegas (mesmos lugares)</button>`;
+  saveBest(state.total);
+  $('shareBtn').onclick = shareChallenge;
   $('nextBtn').textContent = 'Jogar de novo';
-  $('nextBtn').onclick = startGame;
+  $('nextBtn').onclick = () => { challengeSeed = null; startGame(); };
+}
+
+async function shareChallenge() {
+  const url = `${location.origin}${location.pathname}?desafio=${state.seed.toString(36)}`;
+  const text = `Fiz ${state.total.toLocaleString('pt-BR')} pontos no Onde em Goiânia. Consegue mais? ${url}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    $('shareBtn').textContent = 'Link copiado! Cole no chat';
+  } catch {
+    prompt('Copie o link do desafio:', text);
+  }
 }
 
 function startGame() {
-  Object.assign(state, { round: 0, total: 0, results: [] });
+  const seed = challengeSeed ?? Math.floor(Math.random() * 2 ** 31);
+  Object.assign(state, { round: 0, total: 0, results: [], seed, rng: mulberry32(seed) });
   newRound();
+}
+
+// Tela inicial: recorde e aviso de desafio
+if (getBest()) $('startInfo').textContent = `Seu recorde: ${getBest().toLocaleString('pt-BR')} pts`;
+if (challengeSeed !== null) {
+  $('startInfo').textContent = 'Um colega te desafiou: você vai jogar os mesmos 5 lugares.';
+  $('playBtn').textContent = 'Aceitar desafio';
 }
 
 // ---------- início ----------
