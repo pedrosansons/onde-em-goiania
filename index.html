@@ -39,6 +39,13 @@
 
   /* Jogo */
   #pano { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  /* Modo sem mexer: camada por cima do iframe que bloqueia andar; arrastar gira a câmera */
+  #shield { position: absolute; inset: 0; z-index: 4; display: none; cursor: grab; touch-action: none; }
+  #shield.active { display: block; }
+  #shield:active { cursor: grabbing; }
+  #shieldHint { position: absolute; left: 50%; bottom: 36px; transform: translateX(-50%); background: #000c;
+    padding: 8px 14px; border-radius: 999px; font-size: .85rem; white-space: nowrap; pointer-events: none; }
+  .toggle { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; cursor: pointer; }
   /* Tampa a caixa de endereço que o embed do Google mostra no canto superior esquerdo */
   #hud { position: absolute; top: 0; left: 0; z-index: 5; width: 360px; max-width: 100vw; height: 96px;
     background: var(--bg); border-bottom-right-radius: 16px; padding: 14px 16px;
@@ -79,6 +86,7 @@
     <h1>Onde em <span>Goiânia</span>?</h1>
     <p>Você cai numa rua aleatória de Goiânia. Olhe em volta, ande pelas ruas e marque no mapa onde acha que está.
        5 rodadas, até 5.000 pontos cada.</p>
+    <label class="toggle" id="noMoveToggle"><input id="noMove" type="checkbox"> Sem mexer (não dá pra andar, só girar)</label>
     <p id="startInfo" style="color: var(--accent)"></p>
     <p class="error" id="startError"></p>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -91,6 +99,7 @@
 <!-- Jogo -->
 <div id="game" class="screen">
   <iframe id="pano" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe>
+  <div id="shield"><div id="shieldHint">Sem mexer · arraste ou use ← → para girar</div></div>
   <div id="hud">
     <div class="line"><span id="roundPill">Rodada 1/5</span><span id="scorePill">0 pts</span></div>
     <div class="actions">
@@ -119,10 +128,13 @@ const MAX_POINTS = 5000;
 const CENTER = [-16.6799, -49.255];
 
 const $ = id => document.getElementById(id);
-const state = { round: 0, total: 0, results: [], current: null, heading: 0, guess: null, seed: 0, rng: Math.random };
+const state = { round: 0, total: 0, results: [], current: null, heading: 0, startHeading: 0, guess: null,
+  seed: 0, rng: Math.random, noMove: false };
 
 // Desafio: ?desafio=<semente> faz todo mundo jogar os mesmos 5 lugares
-const challengeParam = new URLSearchParams(location.search).get('desafio');
+const urlParams = new URLSearchParams(location.search);
+const challengeParam = urlParams.get('desafio');
+let challengeNoMove = urlParams.get('sm') === '1'; // sm=1: desafio sem mexer
 // Cuidado: parseInt(null, 36) vira parseInt("null", 36), que é um número válido
 let challengeSeed = challengeParam ? parseInt(challengeParam, 36) : NaN;
 if (!Number.isFinite(challengeSeed)) challengeSeed = null;
@@ -222,8 +234,34 @@ function updateHud() {
 
 function placeNewLocation() {
   state.current = pickLocation();
-  state.heading = Math.floor(state.rng() * 360);
+  state.heading = state.startHeading = Math.floor(state.rng() * 360);
   loadPano(false);
+}
+
+// No modo sem mexer o jogador não toca no iframe; girar = recarregar a vista com outra direção
+function rotate(deg) {
+  state.heading = Math.round((state.heading + deg) % 360 + 360) % 360;
+  loadPano(true);
+}
+
+function setupShield() {
+  const shield = $('shield'), pano = $('pano');
+  let startX = null;
+  shield.addEventListener('pointerdown', e => {
+    startX = e.clientX;
+    shield.setPointerCapture(e.pointerId);
+  });
+  shield.addEventListener('pointermove', e => {
+    if (startX !== null) pano.style.transform = `translateX(${e.clientX - startX}px)`;
+  });
+  shield.addEventListener('pointerup', e => {
+    if (startX === null) return;
+    const dx = e.clientX - startX;
+    startX = null;
+    pano.style.transform = '';
+    // Arrastar a tela inteira ≈ girar 120°
+    if (Math.abs(dx) > 5) rotate(-dx / window.innerWidth * 120);
+  });
 }
 
 function newRound() {
@@ -236,6 +274,7 @@ function newRound() {
   if (guessMarker) { guessMarker.remove(); guessMarker = null; }
   guessMap.setView(CENTER, 12);
   setTimeout(() => guessMap.invalidateSize(), 50);
+  $('shield').classList.toggle('active', state.noMove);
   placeNewLocation();
 }
 
@@ -292,12 +331,14 @@ function showFinal() {
 // Sai do modo desafio e tira o ?desafio= da barra de endereço, pra recarregar não repetir os lugares
 function leaveChallenge() {
   challengeSeed = null;
+  challengeNoMove = false;
   history.replaceState(null, '', location.pathname);
 }
 
 async function shareChallenge() {
-  const url = `${location.origin}${location.pathname}?desafio=${state.seed.toString(36)}`;
-  const text = `Fiz ${state.total.toLocaleString('pt-BR')} pontos no Onde em Goiânia. Consegue mais? ${url}`;
+  const url = `${location.origin}${location.pathname}?desafio=${state.seed.toString(36)}${state.noMove ? '&sm=1' : ''}`;
+  const mode = state.noMove ? ' (sem mexer)' : '';
+  const text = `Fiz ${state.total.toLocaleString('pt-BR')} pontos no Onde em Goiânia${mode}. Consegue mais? ${url}`;
   try {
     await navigator.clipboard.writeText(text);
     $('shareBtn').textContent = 'Link copiado! Cole no chat';
@@ -308,14 +349,17 @@ async function shareChallenge() {
 
 function startGame() {
   const seed = challengeSeed ?? Math.floor(Math.random() * 2 ** 31);
-  Object.assign(state, { round: 0, total: 0, results: [], seed, rng: mulberry32(seed) });
+  const noMove = challengeSeed !== null ? challengeNoMove : $('noMove').checked;
+  Object.assign(state, { round: 0, total: 0, results: [], seed, rng: mulberry32(seed), noMove });
   newRound();
 }
 
 // Tela inicial: recorde e aviso de desafio
 if (getBest()) $('startInfo').textContent = `Seu recorde: ${getBest().toLocaleString('pt-BR')} pts`;
 if (challengeSeed !== null) {
-  $('startInfo').textContent = 'Um colega te desafiou: você vai jogar os mesmos 5 lugares.';
+  $('startInfo').textContent = 'Um colega te desafiou: você vai jogar os mesmos 5 lugares'
+    + (challengeNoMove ? ', sem mexer.' : '.');
+  $('noMoveToggle').style.display = 'none'; // o modo vem do desafio
   $('playBtn').textContent = 'Aceitar desafio';
   $('randomBtn').style.display = '';
 }
@@ -329,12 +373,24 @@ $('playBtn').onclick = () => {
   if (!guessMap) setupMaps();
   startGame();
 };
-$('randomBtn').onclick = () => { leaveChallenge(); $('playBtn').click(); };
+$('randomBtn').onclick = () => {
+  leaveChallenge();
+  $('noMoveToggle').style.display = '';
+  $('playBtn').click();
+};
 $('guessBtn').onclick = makeGuess;
-$('homeBtn').onclick = () => state.current && loadPano(true);
+$('homeBtn').onclick = () => {
+  if (!state.current) return;
+  state.heading = state.startHeading;
+  loadPano(true);
+};
+setupShield();
 $('skipBtn').onclick = placeNewLocation;
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space' && $('game').classList.contains('active') && state.guess) { e.preventDefault(); makeGuess(); }
+  if (!$('game').classList.contains('active') || e.target.closest?.('#guessMap')) return;
+  if (e.code === 'Space' && state.guess) { e.preventDefault(); makeGuess(); }
+  if (state.noMove && e.code === 'ArrowLeft') rotate(-45);
+  if (state.noMove && e.code === 'ArrowRight') rotate(45);
 });
 </script>
 </body>
