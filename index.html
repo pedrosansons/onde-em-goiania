@@ -81,7 +81,10 @@
        5 rodadas, até 5.000 pontos cada.</p>
     <p id="startInfo" style="color: var(--accent)"></p>
     <p class="error" id="startError"></p>
-    <button id="playBtn">Jogar</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button id="playBtn">Jogar</button>
+      <button id="randomBtn" class="ghost" style="display:none">Jogar lugares aleatórios</button>
+    </div>
   </div>
 </div>
 
@@ -119,7 +122,9 @@ const $ = id => document.getElementById(id);
 const state = { round: 0, total: 0, results: [], current: null, heading: 0, guess: null, seed: 0, rng: Math.random };
 
 // Desafio: ?desafio=<semente> faz todo mundo jogar os mesmos 5 lugares
-let challengeSeed = parseInt(new URLSearchParams(location.search).get('desafio'), 36);
+const challengeParam = new URLSearchParams(location.search).get('desafio');
+// Cuidado: parseInt(null, 36) vira parseInt("null", 36), que é um número válido
+let challengeSeed = challengeParam ? parseInt(challengeParam, 36) : NaN;
 if (!Number.isFinite(challengeSeed)) challengeSeed = null;
 
 function mulberry32(a) {
@@ -281,7 +286,13 @@ function showFinal() {
   saveBest(state.total);
   $('shareBtn').onclick = shareChallenge;
   $('nextBtn').textContent = 'Jogar de novo';
-  $('nextBtn').onclick = () => { challengeSeed = null; startGame(); };
+  $('nextBtn').onclick = () => { leaveChallenge(); startGame(); };
+}
+
+// Sai do modo desafio e tira o ?desafio= da barra de endereço, pra recarregar não repetir os lugares
+function leaveChallenge() {
+  challengeSeed = null;
+  history.replaceState(null, '', location.pathname);
 }
 
 async function shareChallenge() {
@@ -306,6 +317,7 @@ if (getBest()) $('startInfo').textContent = `Seu recorde: ${getBest().toLocaleSt
 if (challengeSeed !== null) {
   $('startInfo').textContent = 'Um colega te desafiou: você vai jogar os mesmos 5 lugares.';
   $('playBtn').textContent = 'Aceitar desafio';
+  $('randomBtn').style.display = '';
 }
 
 // ---------- início ----------
@@ -317,6 +329,7 @@ $('playBtn').onclick = () => {
   if (!guessMap) setupMaps();
   startGame();
 };
+$('randomBtn').onclick = () => { leaveChallenge(); $('playBtn').click(); };
 $('guessBtn').onclick = makeGuess;
 $('homeBtn').onclick = () => state.current && loadPano(true);
 $('skipBtn').onclick = placeNewLocation;
